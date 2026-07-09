@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1" />
+  <meta name="theme-color" content="#160f18" />
+  <title>متجر روز · المقتنيات</title>
+
+  <!-- عنوان الـ API الأساسي (نفس النطاق افتراضياً؛ nginx يوجّه /api و /media) -->
+  <meta name="roz-api-base" content="" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@600;700;800&family=Tajawal:wght@400;500;700&display=swap" rel="stylesheet" />
+
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <link rel="stylesheet" href="./css/app.css" />
+</head>
+<body>
+  <a class="skip-link" href="#grid">تخطَّ إلى المقتنيات</a>
+  <!-- خلفية الفترينة (توهّج ناعم) -->
+  <div class="vitrine-glow" aria-hidden="true"></div>
+
+  <div class="offline-bar" id="offlineBar" role="status" hidden>لا يوجد اتصال — تُعرض بيانات محفوظة</div>
+
+  <header class="app-header" id="appHeader">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="none">
+          <path d="M12 3c2.6 1.2 4 3.2 4 5.4 0 2.5-1.8 4.6-4 6.6-2.2-2-4-4.1-4-6.6C8 6.2 9.4 4.2 12 3Z" fill="currentColor"/>
+          <path d="M12 14.9c1.8 1.7 3 3.4 3 5 0 1.7-1.3 2.8-3 2.8s-3-1.1-3-2.8c0-1.6 1.2-3.3 3-5Z" fill="currentColor" opacity=".55"/>
+        </svg>
+      </span>
+      <span class="brand-name">متجر روز</span>
+      <span class="brand-sub">المقتنيات</span>
+    </div>
+    <button class="icon-btn" id="themeToggle" aria-label="تبديل السمة" title="السمة">
+      <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.6">
+        <path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z"/>
+      </svg>
+    </button>
+  </header>
+
+  <div class="toolbar">
+    <div class="search-wrap">
+      <svg class="search-ic" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7">
+        <circle cx="11" cy="11" r="7"/><path d="m20 20-3-3"/>
+      </svg>
+      <input id="searchInput" class="search-input" type="search" inputmode="search"
+             placeholder="ابحث بالاسم أو المجموعة أو الرقم" autocomplete="off" />
+      <button class="search-clear" id="searchClear" aria-label="مسح" hidden>&times;</button>
+    </div>
+    <button class="tool-btn" id="filterBtn" aria-label="تصفية">
+      <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.7">
+        <path d="M3 5h18M6 12h12M10 19h4"/>
+      </svg>
+      <span class="tool-dot" id="filterDot" hidden></span>
+    </button>
+    <button class="tool-btn" id="sortBtn" aria-label="ترتيب">
+      <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.7">
+        <path d="M7 4v16m0 0-3-3m3 3 3-3M17 20V4m0 0-3 3m3-3 3 3"/>
+      </svg>
+    </button>
+  </div>
+
+  <nav class="chips" id="chips" aria-label="الفئات"></nav>
+
+  <main class="grid" id="grid" role="list" aria-live="polite" aria-busy="false"></main>
+  <div id="sentinel" class="sentinel" aria-hidden="true"></div>
+  <div id="gridFooter" class="grid-footer"></div>
+  <div class="load-more-wrap" id="loadMoreWrap" hidden>
+    <button class="load-more" id="loadMoreBtn">تحميل المزيد</button>
+  </div>
+
+  <!-- ورقة التفاصيل -->
+  <div class="sheet-backdrop" id="sheetBackdrop" hidden></div>
+  <section class="sheet" id="detailSheet" hidden aria-modal="true" role="dialog"></section>
+
+  <!-- ورقة الفلاتر -->
+  <div class="sheet-backdrop" id="filterBackdrop" hidden></div>
+  <section class="sheet" id="filterSheet" hidden aria-modal="true" role="dialog"></section>
+
+  <!-- قائمة الترتيب -->
+  <div class="menu-backdrop" id="sortBackdrop" hidden></div>
+  <div class="sort-menu" id="sortMenu" hidden role="menu"></div>
+
+  <div class="toast" id="toast" hidden></div>
+
+  <script type="module" src="./js/app.js"></script>
+</body>
+</html>
