@@ -46,6 +46,13 @@ class TokenManager:
         auth_path: str = "/api/v1/auth",
         timeout: float = 30.0,
         metrics: Optional[Metrics] = None,
+        limiter=None,
+        referer: str = "https://cdn.tgmrkt.io/",
+        origin: str = "https://cdn.tgmrkt.io",
+        user_agent: str = (
+            "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
+        ),
     ):
         self._http = http
         self._base = base_url.rstrip("/")
@@ -54,6 +61,15 @@ class TokenManager:
         self._auth_path = auth_path
         self._timeout = timeout
         self._m = resolve(metrics)
+        self._limiter = limiter
+        # ترويسات مطابقة للعميل الرسمي عند /auth أيضاً
+        self._auth_headers = {
+            "Referer": referer,
+            "Origin": origin,
+            "User-Agent": user_agent,
+            "Accept": "application/json, text/plain, */*",
+            "Content-Type": "application/json",
+        }
         self._token: Optional[str] = None
         self._lock = asyncio.Lock()
 
@@ -89,8 +105,11 @@ class TokenManager:
         if not init_data:
             raise AuthError("initData فارغ — تعذّر توليد المصادقة")
         payload = {"data": init_data, "appId": self._app_id}
+        if self._limiter is not None:
+            await self._limiter.acquire()
         resp = await self._http.request(
-            "POST", f"{self._base}{self._auth_path}", json=payload, timeout=self._timeout
+            "POST", f"{self._base}{self._auth_path}", json=payload,
+            headers=self._auth_headers, timeout=self._timeout,
         )
         if resp.status == 401:
             raise AuthError("رُفضت المصادقة (401) عند /auth")

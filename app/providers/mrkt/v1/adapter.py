@@ -46,6 +46,7 @@ class MrktProvider(BaseProvider):
             "version": self.version,
             "has_token": self._tokens.has_token,
             "breaker": self._client.breaker_snapshot(),
+            "rate_limiter": self._client.limiter_snapshot(),
             "metrics": self._m.snapshot(),
         }
 

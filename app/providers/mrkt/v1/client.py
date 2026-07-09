@@ -22,9 +22,11 @@ from app.core.logging_setup import get_logger, request_context
 from app.core.metrics import CB_STATE_CODE, Metrics, resolve
 from app.infra.http_client import AsyncHttpClient, HttpResponse
 from app.infra.resilience import (
+    AsyncRateLimiter,
     AuthError,
     CircuitBreaker,
     ProviderError,
+    RateLimitError,
     TransientError,
     retry_async,
 )
@@ -53,6 +55,13 @@ class MrktClient:
         timeout: float = 30.0,
         saling_count: int = 20,
         metrics: Optional[Metrics] = None,
+        limiter: Optional[AsyncRateLimiter] = None,
+        referer: str = "https://cdn.tgmrkt.io/",
+        origin: str = "https://cdn.tgmrkt.io",
+        user_agent: str = (
+            "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
+        ),
     ):
         self._http = http
         self._base = base_url.rstrip("/")
@@ -64,6 +73,34 @@ class MrktClient:
         self._timeout = timeout
         self._saling_count = saling_count
         self._m = resolve(metrics)
+        # محدِّد معدّل داخلي (يمنع تجاوز rps المسموح، خاصةً في المزامنة الأولى)
+        self._limiter = limiter or AsyncRateLimiter(rate=1.0, burst=1)
+        self._referer = referer
+        self._origin = origin
+        self._user_agent = user_agent
+
+    def _headers(self, token: str) -> Dict[str, str]:
+        """ترويسات مطابقة للعميل الرسمي (Referer/Origin/User-Agent) + التوكن الخام."""
+        return {
+            "Authorization": token,
+            "Referer": self._referer,
+            "Origin": self._origin,
+            "User-Agent": self._user_agent,
+            "Accept": "application/json, text/plain, */*",
+            "Accept-Language": "en-US,en;q=0.9",
+        }
+
+    @staticmethod
+    def _parse_retry_after(resp: HttpResponse) -> Optional[float]:
+        """يقرأ Retry-After (ثوانٍ) من الاستجابة إن وُجدت."""
+        hdrs = resp.headers or {}
+        for k, v in hdrs.items():
+            if k.lower() == "retry-after":
+                try:
+                    return float(str(v).strip())
+                except (TypeError, ValueError):
+                    return None
+        return None
 
     # ── طلب مصادَق مع تجديد 401 لمرة واحدة ──
     async def _authed_request(
@@ -72,13 +109,14 @@ class MrktClient:
         with request_context(provider="mrkt") as ctx:
             async def _do() -> HttpResponse:
                 token = await self._tokens.get_token()
+                await self._limiter.acquire()          # لا نتجاوز الحدّ المسموح
                 self._m.inc("api_requests")
                 with self._m.timer("provider_latency"):
                     resp = await self._http.request(
                         method,
                         f"{self._base}{path}",
                         json=json,
-                        headers={"Authorization": token},
+                        headers=self._headers(token),
                         timeout=self._timeout,
                     )
                 if resp.status == 401:
@@ -86,16 +124,17 @@ class MrktClient:
                     _log.warning("401 received; refreshing token and retrying %s", path)
                     self._tokens.invalidate()
                     token = await self._tokens.refresh()
+                    await self._limiter.acquire()      # الطلب المُعاد يُحتسَب أيضاً
                     self._m.inc("api_requests")
                     with self._m.timer("provider_latency"):
                         resp = await self._http.request(
                             method,
                             f"{self._base}{path}",
                             json=json,
-                            headers={"Authorization": token},
+                            headers=self._headers(token),
                             timeout=self._timeout,
                         )
-                self._raise_for_status(resp)
+                self._raise_for_status(resp, limiter=self._limiter)
                 return resp
 
             async def _guarded() -> HttpResponse:
@@ -184,11 +223,21 @@ class MrktClient:
             _log.error("429 — كامل ترويسات الاستجابة: %s", dict(all_hdrs) if all_hdrs else "{}")
 
     @staticmethod
-    def _raise_for_status(resp: HttpResponse) -> None:
+    def _raise_for_status(resp: HttpResponse, limiter: Optional[AsyncRateLimiter] = None) -> None:
         if resp.status == 401:
             # 401 متوقّع في مسار التجديد؛ يُسجَّل عند الفشل النهائي فقط
             raise AuthError("401 بعد تجديد التوكن")
-        if resp.status == 429 or resp.status >= 500:
+        if resp.status == 429:
+            MrktClient._log_error_response(resp)
+            retry_after = MrktClient._parse_retry_after(resp)
+            # أوقف الإصدار مؤقتاً للمدّة المطلوبة (أو مهلة تحفّظية إن غابت)
+            if limiter is not None:
+                limiter.pause(retry_after if retry_after else 5.0)
+            raise RateLimitError(
+                f"حدّ معدّل من المزوّد (429){f' — Retry-After={retry_after}s' if retry_after else ''}",
+                retry_after=retry_after,
+            )
+        if resp.status >= 500:
             MrktClient._log_error_response(resp)
             raise TransientError(f"حالة عابرة {resp.status}")
         if resp.status >= 400:
@@ -227,6 +276,9 @@ class MrktClient:
 
     def breaker_snapshot(self) -> dict:
         return self._breaker.snapshot()
+
+    def limiter_snapshot(self) -> dict:
+        return self._limiter.snapshot()
 
     async def aclose(self) -> None:
         """إغلاق رشيق لعميل HTTP الأساسي."""

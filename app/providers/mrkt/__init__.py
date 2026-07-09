@@ -14,7 +14,7 @@ from app.providers import register_provider
 
 def _wire(settings, metrics, http):
     """يربط طبقات MRKT فوق عميل HTTP ومقاييس مُعطَيَين."""
-    from app.infra.resilience import CircuitBreaker
+    from app.infra.resilience import AsyncRateLimiter, CircuitBreaker
     from app.providers.mrkt.v1.adapter import MrktProvider
     from app.providers.mrkt.v1.client import MrktClient
     from app.providers.mrkt.v1.token_manager import (
@@ -30,9 +30,12 @@ def _wire(settings, metrics, http):
         webview_url=settings.mrkt_webview_url,
         app_short_name=settings.mrkt_app_short_name,
     )
+    limiter = AsyncRateLimiter(rate=settings.mrkt_max_rps, burst=settings.mrkt_burst)
     tokens = TokenManager(
         http, settings.mrkt_base_url, idp,
         app_id=settings.mrkt_auth_app_id, timeout=settings.mrkt_timeout, metrics=metrics,
+        limiter=limiter, referer=settings.mrkt_referer, origin=settings.mrkt_origin,
+        user_agent=settings.mrkt_user_agent,
     )
     breaker = CircuitBreaker(
         fail_threshold=settings.cb_fail_threshold, reset_timeout=settings.cb_reset_timeout
@@ -42,6 +45,8 @@ def _wire(settings, metrics, http):
         breaker=breaker, retries=settings.retry_max,
         base_delay=settings.retry_base_delay, max_delay=settings.retry_max_delay,
         timeout=settings.mrkt_timeout, saling_count=settings.saling_count, metrics=metrics,
+        limiter=limiter, referer=settings.mrkt_referer, origin=settings.mrkt_origin,
+        user_agent=settings.mrkt_user_agent,
     )
     return MrktProvider(client, tokens, metrics=metrics)
 
