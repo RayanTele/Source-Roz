@@ -26,6 +26,14 @@ from app.infra.resilience import AuthError, ProviderError
 _log = get_logger("mrkt.token")
 
 
+def mask_secret(value: str, keep: int = 6) -> str:
+    """يُخفي معظم السرّ للتسجيل الآمن: abc123…(len=36)."""
+    if not value:
+        return "<فارغ>"
+    v = str(value)
+    return f"{v[:keep]}…(len={len(v)})"
+
+
 class InitDataProvider(ABC):
     """واجهة توليد initData (تُنفَّذ بـ Telethon إنتاجياً، أو وهمياً للاختبار)."""
 
@@ -48,11 +56,8 @@ class TokenManager:
         metrics: Optional[Metrics] = None,
         limiter=None,
         referer: str = "https://cdn.tgmrkt.io/",
-        origin: str = "https://cdn.tgmrkt.io",
-        user_agent: str = (
-            "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 "
-            "(KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
-        ),
+        origin: str = "",
+        user_agent: str = "",
     ):
         self._http = http
         self._base = base_url.rstrip("/")
@@ -63,13 +68,12 @@ class TokenManager:
         self._m = resolve(metrics)
         self._limiter = limiter
         # ترويسات مطابقة للعميل الرسمي عند /auth أيضاً
-        self._auth_headers = {
-            "Referer": referer,
-            "Origin": origin,
-            "User-Agent": user_agent,
-            "Accept": "application/json, text/plain, */*",
-            "Content-Type": "application/json",
-        }
+        # المرجع يرسل Referer فقط (+ Content-Type من مكتبة HTTP)
+        self._auth_headers = {"Referer": referer, "Content-Type": "application/json"}
+        if origin:
+            self._auth_headers["Origin"] = origin
+        if user_agent:
+            self._auth_headers["User-Agent"] = user_agent
         self._token: Optional[str] = None
         self._lock = asyncio.Lock()
 
@@ -100,27 +104,91 @@ class TokenManager:
             self._token = await self._authenticate()
             return self._token
 
+    def _log_auth_response(self, resp) -> None:
+        """يسجّل استجابة /auth كاملة مع إخفاء القيم السرّية."""
+        import json as _json
+        body_preview = "<فارغ>"
+        try:
+            raw = (resp.body or b"").decode("utf-8", errors="replace")
+            if raw:
+                try:
+                    obj = _json.loads(raw)
+                    if isinstance(obj, dict):
+                        safe = {
+                            k: (mask_secret(v) if k.lower() in
+                                ("token", "access_token", "accesstoken", "jwt", "authtoken", "refreshtoken")
+                                else v)
+                            for k, v in obj.items()
+                        }
+                        body_preview = _json.dumps(safe, ensure_ascii=False)[:600]
+                    else:
+                        body_preview = raw[:400]
+                except ValueError:
+                    body_preview = raw[:400]
+        except Exception:
+            body_preview = "<غير قابل للقراءة>"
+        hdrs = resp.headers or {}
+        interesting = {k: v for k, v in hdrs.items()
+                       if k.lower() in ("content-type", "set-cookie", "server", "cf-ray", "date")}
+        if "set-cookie" in {k.lower() for k in hdrs}:
+            _log.warning("تنبيه: /auth أرسل Set-Cookie — المرجع لا يستخدم كوكيز")
+        _log.info(
+            "AUTH RESPONSE: status=%s | ترويسات=%s | الجسم=%s",
+            resp.status, interesting if interesting else "{}", body_preview,
+        )
+
     async def _authenticate(self) -> str:
         init_data = await self._idp.get_init_data()
         if not init_data:
             raise AuthError("initData فارغ — تعذّر توليد المصادقة")
-        payload = {"data": init_data, "appId": self._app_id}
+        # المرجع الرسمي يرسل {"data": init_data} فقط — بلا appId إطلاقاً.
+        # نُدرج appId فقط إذا ضُبط صراحةً (MRKT_AUTH_APP_ID).
+        payload = {"data": init_data}
+        if self._app_id:
+            payload["appId"] = self._app_id
+
+        _log.info(
+            "AUTH REQUEST: %s%s | مفاتيح الجسم=%s | طول initData=%s | ترويسات=%s",
+            self._base, self._auth_path, sorted(payload.keys()),
+            len(init_data), sorted(self._auth_headers.keys()),
+        )
         if self._limiter is not None:
             await self._limiter.acquire()
         resp = await self._http.request(
             "POST", f"{self._base}{self._auth_path}", json=payload,
             headers=self._auth_headers, timeout=self._timeout,
         )
+        self._log_auth_response(resp)
+
         if resp.status == 401:
             raise AuthError("رُفضت المصادقة (401) عند /auth")
         if resp.status >= 400:
             raise ProviderError(f"فشل /auth بحالة {resp.status}")
         data = resp.json() or {}
-        token = data.get("token")
+
+        # اسم حقل التوكن: المرجع يستخدم "token". نبحث عن البدائل للتشخيص فقط.
+        token = None
+        field_used = None
+        for candidate in ("token", "access_token", "accessToken", "jwt", "authToken"):
+            if isinstance(data, dict) and data.get(candidate):
+                token, field_used = data[candidate], candidate
+                break
+        token_type = data.get("token_type") or data.get("tokenType") if isinstance(data, dict) else None
+        _log.info(
+            "AUTH PARSED: حقل التوكن=%s | token_type=%s | طول التوكن=%s | كل حقول الاستجابة=%s",
+            field_used, token_type if token_type else "<غير موجود>",
+            len(token) if token else 0,
+            sorted(data.keys()) if isinstance(data, dict) else type(data).__name__,
+        )
         if not token:
             raise ProviderError("استجابة /auth بلا حقل token")
+        if field_used != "token":
+            _log.warning("تنبيه: التوكن جاء في حقل %r لا 'token' — يخالف المرجع", field_used)
+        if token_type:
+            _log.warning("تنبيه: الاستجابة تحوي token_type=%r — المرجع لا يستخدمه", token_type)
+
         self._m.inc("token_refreshes")
-        _log.info("token refreshed successfully")
+        _log.info("token refreshed successfully (%s)", mask_secret(token))
         return token
 
 

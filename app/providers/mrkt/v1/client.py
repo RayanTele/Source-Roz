@@ -57,11 +57,8 @@ class MrktClient:
         metrics: Optional[Metrics] = None,
         limiter: Optional[AsyncRateLimiter] = None,
         referer: str = "https://cdn.tgmrkt.io/",
-        origin: str = "https://cdn.tgmrkt.io",
-        user_agent: str = (
-            "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 "
-            "(KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
-        ),
+        origin: str = "",
+        user_agent: str = "",
     ):
         self._http = http
         self._base = base_url.rstrip("/")
@@ -80,15 +77,28 @@ class MrktClient:
         self._user_agent = user_agent
 
     def _headers(self, token: str) -> Dict[str, str]:
-        """ترويسات مطابقة للعميل الرسمي (Referer/Origin/User-Agent) + التوكن الخام."""
-        return {
-            "Authorization": token,
-            "Referer": self._referer,
-            "Origin": self._origin,
-            "User-Agent": self._user_agent,
-            "Accept": "application/json, text/plain, */*",
-            "Accept-Language": "en-US,en;q=0.9",
-        }
+        """
+        ترويسات مطابقة **حرفياً** للمرجع الرسمي العامل:
+            {'Authorization': token, 'Referer': 'https://cdn.tgmrkt.io/'}
+        التوكن خام بلا بادئة Bearer. لا Origin ولا User-Agent ولا Cookie —
+        المرجع لا يرسلها؛ تُضاف فقط إن ضُبطت صراحةً في البيئة.
+        """
+        h = {"Authorization": token, "Referer": self._referer}
+        if self._origin:
+            h["Origin"] = self._origin
+        if self._user_agent:
+            h["User-Agent"] = self._user_agent
+        return h
+
+    def _log_auth_header(self, token: str, path: str) -> None:
+        """يسجّل قيمة Authorization المُرسَلة فعلياً (مع إخفاء معظم التوكن)."""
+        from app.providers.mrkt.v1.token_manager import mask_secret
+
+        scheme = "Bearer" if token.lower().startswith("bearer ") else "<خام بلا بادئة>"
+        _log.info(
+            "REQUEST %s | Authorization: %s | الصيغة=%s | ترويسات مرسلة=%s",
+            path, mask_secret(token), scheme, sorted(self._headers(token).keys()),
+        )
 
     @staticmethod
     def _parse_retry_after(resp: HttpResponse) -> Optional[float]:
@@ -109,6 +119,7 @@ class MrktClient:
         with request_context(provider="mrkt") as ctx:
             async def _do() -> HttpResponse:
                 token = await self._tokens.get_token()
+                self._log_auth_header(token, path)
                 await self._limiter.acquire()          # لا نتجاوز الحدّ المسموح
                 self._m.inc("api_requests")
                 with self._m.timer("provider_latency"):
@@ -245,14 +256,26 @@ class MrktClient:
             raise ProviderError(f"حالة غير قابلة لإعادة المحاولة {resp.status}")
 
     # ── نقاط القراءة ──
+    #: الحدّ الأقصى لـ count لدى MRKT هو 20 (موثّق في المرجع الرسمي)
+    MAX_SALING_COUNT = 20
+
     async def fetch_listings(self, cursor: str = "") -> tuple[List[Dict[str, Any]], str]:
+        # جسم الطلب مطابق **حرفياً** للمرجع الرسمي العامل (مفاتيح camelCase + كل الحقول)
         body = {
-            "count": self._saling_count,
+            "collectionNames": [],
+            "modelNames": [],
+            "backdropNames": [],
+            "symbolNames": [],
+            "ordering": "Price",
+            "lowToHigh": True,
+            "maxPrice": None,
+            "minPrice": None,
+            "mintable": None,
+            "number": None,
+            "count": min(self._saling_count, self.MAX_SALING_COUNT),
             "cursor": cursor or "",
-            "ModelNames": [],
-            "SymbolNames": [],
-            "BackdropNames": [],
-            "CollectionNames": [],
+            "query": None,
+            "promotedFirst": False,
         }
         resp = await self._authed_request("POST", _SALING_PATH, json=body)
         data = resp.json() or {}

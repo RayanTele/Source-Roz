@@ -97,8 +97,8 @@ def load_settings() -> Settings:
         mrkt_max_rps=float(_get("MRKT_MAX_RPS", "1.0")),
         mrkt_burst=int(_get("MRKT_BURST", "1")),
         mrkt_referer=_get("MRKT_REFERER", "https://cdn.tgmrkt.io/"),
-        mrkt_origin=_get("MRKT_ORIGIN", "https://cdn.tgmrkt.io"),
-        mrkt_user_agent=_get("MRKT_USER_AGENT", "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"),
+        mrkt_origin=_get("MRKT_ORIGIN", ""),          # المرجع لا يرسلها
+        mrkt_user_agent=_get("MRKT_USER_AGENT", ""),  # المرجع لا يرسلها
         mrkt_webview_url=_get("MRKT_WEBVIEW_URL", ""),
         # الصمود
         retry_max=int(_get("RETRY_MAX", "3")),

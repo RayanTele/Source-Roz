@@ -86,11 +86,11 @@ class TestMrktProviderIntegration(unittest.IsolatedAsyncioTestCase):
                         base_delay=0.01, max_delay=0.05, metrics=m, **client_kw)
         return srv, http, MrktProvider(cl, tm, metrics=m), cl, m
 
-    async def test_happy_pagination_normalize_appid(self):
+    async def test_happy_pagination_normalize_no_appid(self):
         st = new_state(); srv, http, prov, cl, m = await self._make(st)
         try:
             self.assertTrue(await prov.authenticate())
-            self.assertIsNone(st["appId_seen"])  # appId=null مُرسَل
+            self.assertEqual(st["appId_seen"], "__missing__")  # المرجع لا يرسل appId إطلاقاً
             g1, c1 = await prov.fetch_listings("")
             self.assertEqual(len(g1), 1); self.assertEqual(c1, "CUR2")
             g2, c2 = await prov.fetch_listings(c1)

@@ -130,10 +130,21 @@ class TestHeaderParity(unittest.TestCase):
             async def close(self): pass
         c = MrktClient(_H(), "https://api.tgmrkt.io", TokenManager(_H(), "https://api.tgmrkt.io", _IDP()))
         h = c._headers("TOKEN-UUID")
+        # مطابقة حرفية للمرجع: Authorization (خام) + Referer فقط
         self.assertEqual(h["Authorization"], "TOKEN-UUID")     # خام بلا Bearer
+        self.assertFalse(h["Authorization"].lower().startswith("bearer"))
         self.assertEqual(h["Referer"], "https://cdn.tgmrkt.io/")
+        self.assertEqual(set(h.keys()), {"Authorization", "Referer"})
+
+    def test_optional_headers_only_when_configured(self):
+        class _H:
+            async def request(self, *a, **k): pass
+            async def close(self): pass
+        c = MrktClient(_H(), "https://api.tgmrkt.io", TokenManager(_H(), "https://api.tgmrkt.io", _IDP()),
+                       origin="https://cdn.tgmrkt.io", user_agent="UA/1")
+        h = c._headers("T")
         self.assertEqual(h["Origin"], "https://cdn.tgmrkt.io")
-        self.assertIn("Mozilla/5.0", h["User-Agent"])
+        self.assertEqual(h["User-Agent"], "UA/1")
 
     def test_token_manager_auth_headers(self):
         class _H:
@@ -141,8 +152,58 @@ class TestHeaderParity(unittest.TestCase):
             async def close(self): pass
         tm = TokenManager(_H(), "https://api.tgmrkt.io", _IDP())
         self.assertEqual(tm._auth_headers["Referer"], "https://cdn.tgmrkt.io/")
-        self.assertIn("Mozilla/5.0", tm._auth_headers["User-Agent"])
+        self.assertNotIn("Origin", tm._auth_headers)      # المرجع لا يرسلها
+        self.assertNotIn("User-Agent", tm._auth_headers)
 
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestReferenceParity(unittest.IsolatedAsyncioTestCase):
+    """يقفل جسم /gifts/saling وترويسات المصادقة على شكل المرجع الرسمي العامل."""
+
+    async def test_saling_body_matches_reference(self):
+        captured = {}
+
+        class _H:
+            async def request(self, method, url, *, json=None, headers=None, timeout=30.0):
+                captured["body"] = json
+                captured["headers"] = headers
+                return HttpResponse(200, _json={"gifts": [], "cursor": None, "total": 0})
+            async def close(self): pass
+
+        class _TM(TokenManager):
+            async def get_token(self): return "TOK"
+
+        c = MrktClient(_H(), "https://api.tgmrkt.io", _TM(_H(), "https://api.tgmrkt.io", _IDP()),
+                       limiter=AsyncRateLimiter(rate=1000, burst=100))
+        await c.fetch_listings("")
+        b = captured["body"]
+        self.assertEqual(sorted(b.keys()), sorted([
+            "collectionNames", "modelNames", "backdropNames", "symbolNames",
+            "ordering", "lowToHigh", "maxPrice", "minPrice", "mintable",
+            "number", "count", "cursor", "query", "promotedFirst",
+        ]))
+        self.assertEqual(b["ordering"], "Price")
+        self.assertIs(b["lowToHigh"], True)
+        self.assertIs(b["promotedFirst"], False)
+        self.assertIsNone(b["maxPrice"]); self.assertIsNone(b["query"])
+        self.assertEqual(b["cursor"], "")
+        # الترويسات: Authorization خام + Referer فقط
+        self.assertEqual(set(captured["headers"].keys()), {"Authorization", "Referer"})
+        self.assertEqual(captured["headers"]["Authorization"], "TOK")
+
+    async def test_count_clamped_to_20(self):
+        captured = {}
+        class _H:
+            async def request(self, method, url, *, json=None, headers=None, timeout=30.0):
+                captured["body"] = json
+                return HttpResponse(200, _json={"gifts": [], "cursor": None})
+            async def close(self): pass
+        class _TM(TokenManager):
+            async def get_token(self): return "T"
+        c = MrktClient(_H(), "https://x", _TM(_H(), "https://x", _IDP()),
+                       saling_count=50, limiter=AsyncRateLimiter(rate=1000, burst=100))
+        await c.fetch_listings("")
+        self.assertEqual(captured["body"]["count"], 20)   # الحدّ الأقصى لدى MRKT
