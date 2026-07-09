@@ -43,6 +43,7 @@ class Settings:
     tg_api_hash: str
     tg_assistant_session: str
     mrkt_bot_username: str
+    mrkt_app_short_name: str
     mrkt_webview_url: str
 
     # ── الصمود (Phase C) ──
@@ -87,6 +88,7 @@ def load_settings() -> Settings:
         tg_api_hash=_get("TG_API_HASH", ""),
         tg_assistant_session=_get("TG_ASSISTANT_SESSION", ""),
         mrkt_bot_username=_get("MRKT_BOT_USERNAME", "mrkt"),
+        mrkt_app_short_name=_get("MRKT_APP_SHORT_NAME", "app"),
         mrkt_webview_url=_get("MRKT_WEBVIEW_URL", ""),
         # الصمود
         retry_max=int(_get("RETRY_MAX", "3")),

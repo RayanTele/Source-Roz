@@ -28,6 +28,7 @@ def _wire(settings, metrics, http):
         session=settings.tg_assistant_session,
         bot_username=settings.mrkt_bot_username,
         webview_url=settings.mrkt_webview_url,
+        app_short_name=settings.mrkt_app_short_name,
     )
     tokens = TokenManager(
         http, settings.mrkt_base_url, idp,

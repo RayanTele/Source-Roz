@@ -107,11 +107,15 @@ class TokenManager:
 
 class TelethonInitDataProvider(InitDataProvider):
     """
-    تنفيذ إنتاجي يولّد initData عبر Telethon (RequestWebViewRequest على @mrkt).
+    تنفيذ إنتاجي يولّد initData عبر Telethon.
+
+    مهم: MRKT هو «Mini App برابط مباشر» (t.me/mrkt/app) ولا يملك زر WebView في
+    قائمة المرفقات، لذلك يجب استخدام RequestAppWebViewRequest مع
+    InputBotAppShortName(short_name="app"). استخدام RequestWebViewRequest معه
+    يُرجع BotInvalidError. نُبقي RequestWebView كمسار احتياطي فقط.
 
     ملاحظة تحقّق: لا يُنفَّذ في المختبر (يتطلّب Telegram حيّاً + جلسة حقيقية).
-    كل الأسرار (api_id/api_hash/session) تُمرَّر من الإعدادات المقروءة من .env.
-    Telethon يُستورَد داخل الدالة (كسل) كي لا يُلزِم الحزمة به وقت الاستيراد.
+    الأسرار (api_id/api_hash/session) تُقرأ من .env. Telethon يُستورَد بكسل.
     """
 
     def __init__(
@@ -121,18 +125,20 @@ class TelethonInitDataProvider(InitDataProvider):
         session: str,
         bot_username: str = "mrkt",
         webview_url: str = "",
+        app_short_name: str = "app",
     ):
         self._api_id = api_id
         self._api_hash = api_hash
         self._session = session
         self._bot = bot_username
         self._webview_url = webview_url
+        self._app_short_name = app_short_name
 
     async def get_init_data(self) -> str:  # pragma: no cover - يتطلّب Telegram حيّاً
         if not (self._api_id and self._api_hash and self._session):
             raise AuthError("إعدادات Telethon ناقصة (api_id/api_hash/session) في .env")
         try:
-            from telethon import TelegramClient, functions
+            from telethon import TelegramClient, functions, types
             from telethon.sessions import StringSession
         except ImportError as exc:
             raise RuntimeError("telethon غير مثبّت — مطلوب لتوليد initData") from exc
@@ -140,25 +146,64 @@ class TelethonInitDataProvider(InitDataProvider):
         client = TelegramClient(StringSession(self._session), self._api_id, self._api_hash)
         await client.connect()
         try:
-            result = await client(
-                functions.messages.RequestWebViewRequest(
-                    peer=self._bot,
-                    bot=self._bot,
-                    platform="android",
-                    url=self._webview_url or None,
-                )
+            if not await client.is_user_authorized():
+                raise AuthError("جلسة Telethon غير مُصرَّح بها — جدّد TG_ASSISTANT_SESSION")
+
+            peer = await client.get_input_entity(self._bot)
+            bot_user = await client.get_entity(self._bot)
+            input_user = types.InputUser(
+                user_id=bot_user.id, access_hash=bot_user.access_hash
             )
-            # يُستخرَج initData من الـ URL الناتج (جزء الاستعلام بعد #tgWebAppData=)
-            return _extract_init_data(result.url)
+
+            # المسار الصحيح لـ Mini App بالرابط المباشر
+            try:
+                result = await client(
+                    functions.messages.RequestAppWebViewRequest(
+                        peer=peer,
+                        app=types.InputBotAppShortName(
+                            bot_id=input_user, short_name=self._app_short_name
+                        ),
+                        platform="android",
+                    )
+                )
+            except Exception as exc_app:
+                # مسار احتياطي (بوتات ذات زر WebView تقليدي)
+                _log.warning(
+                    "RequestAppWebView فشل (%s) — محاولة RequestWebView الاحتياطية",
+                    type(exc_app).__name__,
+                )
+                result = await client(
+                    functions.messages.RequestWebViewRequest(
+                        peer=peer,
+                        bot=input_user,
+                        platform="android",
+                        url=self._webview_url or None,
+                    )
+                )
+
+            init_data = _extract_init_data(result.url)
+            if not init_data:
+                raise AuthError("تعذّر استخراج initData من رابط WebView")
+            return init_data
         finally:
             await client.disconnect()
 
 
 def _extract_init_data(url: str) -> str:
-    """يستخرج سلسلة initData من رابط WebView الناتج عن Telethon."""
+    """
+    يستخرج سلسلة initData من رابط WebView الناتج عن Telethon.
+
+    الرابط يأتي عادةً بالشكل:
+      https://cdn.tgmrkt.io/...#tgWebAppData=<encoded>&tgWebAppVersion=7.0&...
+    نُعيد السلسلة بعد فكّ ترميز واحد (كما تتوقّعها /auth).
+    """
     import urllib.parse as up
 
-    frag = url.split("#", 1)[1] if "#" in url else url
-    params = up.parse_qs(frag)
-    data = params.get("tgWebAppData", [""])[0]
-    return data
+    if "tgWebAppData=" not in url:
+        return ""
+    raw = url.split("tgWebAppData=", 1)[1]
+    # اقطع عند أول معامل تالٍ خاص بـ tgWebApp
+    for sep in ("&tgWebAppVersion", "&tgWebAppPlatform", "&tgWebAppThemeParams", "&tgWebAppBotInline"):
+        if sep in raw:
+            raw = raw.split(sep, 1)[0]
+    return up.unquote(raw)
