@@ -101,6 +101,13 @@ class MrktClient:
             async def _guarded() -> HttpResponse:
                 return await self._breaker.call(_do)
 
+            def _on_retry(attempt: int) -> None:
+                self._m.inc("retries")
+                _log.warning(
+                    "إعادة محاولة #%s لـ %s %s (بعد خطأ عابر — انظر سجل الاستجابة أعلاه)",
+                    attempt, method, path,
+                )
+
             try:
                 resp = await retry_async(
                     _guarded,
@@ -108,7 +115,7 @@ class MrktClient:
                     base_delay=self._base_delay,
                     max_delay=self._max_delay,
                     retry_on=(TransientError,),
-                    on_retry=lambda a: self._m.inc("retries"),
+                    on_retry=_on_retry,
                 )
                 _log.info("%s %s -> %s", method, path, resp.status)
                 return resp
@@ -123,13 +130,69 @@ class MrktClient:
                 )
                 _ = ctx
 
+    # ── تشخيص: ترويسات مفيدة عند الأخطاء (لا أسرار — كلها ترويسات استجابة) ──
+    _DIAG_HEADERS = (
+        "Retry-After", "X-RateLimit-Limit", "X-RateLimit-Remaining", "X-RateLimit-Reset",
+        "RateLimit-Limit", "RateLimit-Remaining", "RateLimit-Reset",
+        "X-Rate-Limit-Limit", "X-Rate-Limit-Remaining", "X-Rate-Limit-Reset",
+        "Content-Type", "Server", "Date", "CF-Ray", "X-Request-Id", "Via",
+    )
+    _DIAG_BODY_LIMIT = 800
+
+    @staticmethod
+    def _diag_body(resp: HttpResponse) -> str:
+        """نص جسم الاستجابة مقتطعاً وآمناً للطباعة."""
+        try:
+            raw = resp.body or b""
+            if not raw:
+                return "<empty>"
+            text = raw.decode("utf-8", errors="replace")
+        except Exception:
+            return "<undecodable>"
+        text = text.strip().replace("\n", " ")
+        if len(text) > MrktClient._DIAG_BODY_LIMIT:
+            return text[: MrktClient._DIAG_BODY_LIMIT] + f"… (+{len(text) - MrktClient._DIAG_BODY_LIMIT} حرفاً)"
+        return text
+
+    @staticmethod
+    def _diag_headers(resp: HttpResponse) -> Dict[str, str]:
+        """الترويسات التشخيصية الموجودة فقط (مع مطابقة غير حسّاسة لحالة الأحرف)."""
+        hdrs = resp.headers or {}
+        lower = {k.lower(): v for k, v in hdrs.items()}
+        found = {}
+        for name in MrktClient._DIAG_HEADERS:
+            val = lower.get(name.lower())
+            if val is not None:
+                found[name] = val
+        return found
+
+    @staticmethod
+    def _log_error_response(resp: HttpResponse) -> None:
+        """يسجّل الاستجابة الكاملة (حالة + ترويسات مهمة + جسم مقتطع) قبل رفع الاستثناء."""
+        hdrs = MrktClient._diag_headers(resp)
+        retry_after = hdrs.get("Retry-After")
+        _log.error(
+            "استجابة خطأ من المزوّد: status=%s retry_after=%s headers=%s body=%s",
+            resp.status,
+            retry_after if retry_after is not None else "-",
+            hdrs if hdrs else "{}",
+            MrktClient._diag_body(resp),
+        )
+        if resp.status == 429:
+            # كل ترويسات الاستجابة عند 429 (لالتقاط أسماء غير قياسية للحدّ)
+            all_hdrs = resp.headers or {}
+            _log.error("429 — كامل ترويسات الاستجابة: %s", dict(all_hdrs) if all_hdrs else "{}")
+
     @staticmethod
     def _raise_for_status(resp: HttpResponse) -> None:
         if resp.status == 401:
+            # 401 متوقّع في مسار التجديد؛ يُسجَّل عند الفشل النهائي فقط
             raise AuthError("401 بعد تجديد التوكن")
         if resp.status == 429 or resp.status >= 500:
+            MrktClient._log_error_response(resp)
             raise TransientError(f"حالة عابرة {resp.status}")
         if resp.status >= 400:
+            MrktClient._log_error_response(resp)
             raise ProviderError(f"حالة غير قابلة لإعادة المحاولة {resp.status}")
 
     # ── نقاط القراءة ──
