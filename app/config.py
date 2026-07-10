@@ -16,8 +16,33 @@ from typing import Optional
 
 
 def _get(key: str, default: str) -> str:
+    """
+    يقرأ متغيّر بيئة مع تنظيف آمن.
+
+    ملاحظة حرجة: systemd EnvironmentFile لا يزيل التعليقات اللاحقة على السطر،
+    فسطر مثل:  MRKT_AUTH_APP_ID=      # فارغ
+    يُنتج القيمة "# فارغ" (نصّ غير فارغ!) بدل الفراغ. لذا نزيل هنا:
+      - التعليق اللاحق (# أو ; مسبوقاً بمسافة) إن لم تكن القيمة مقتبسة
+      - علامات الاقتباس المحيطة
+      - المسافات الطرفية
+    """
     val = os.getenv(key)
-    return val if val is not None and val != "" else default
+    if val is None:
+        return default
+    val = val.strip()
+    # قيمة مقتبسة: أعِدها كما هي بعد نزع الاقتباس
+    if len(val) >= 2 and val[0] == val[-1] and val[0] in ("'", '"'):
+        return val[1:-1]
+    # أزل التعليق اللاحق (يجب أن يسبقه مسافة أو يكون في البداية)
+    for marker in ("#", ";"):
+        idx = val.find(marker)
+        while idx != -1:
+            if idx == 0 or val[idx - 1].isspace():
+                val = val[:idx]
+                break
+            idx = val.find(marker, idx + 1)
+    val = val.strip()
+    return val if val else default
 
 
 @dataclass(frozen=True)
@@ -74,7 +99,7 @@ class Settings:
 
 def load_settings() -> Settings:
     """يبني الإعدادات من البيئة مع قيم افتراضية بنيوية آمنة (بلا أسرار)."""
-    app_id = os.getenv("MRKT_AUTH_APP_ID")  # None صراحةً كما في العقد
+    app_id = _get("MRKT_AUTH_APP_ID", "")  # يُنظَّف من التعليقات اللاحقة
     return Settings(
         # بنيوي
         db_path=_get("DB_PATH", "data/collectibles.db"),

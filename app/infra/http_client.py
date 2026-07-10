@@ -87,3 +87,37 @@ class AiohttpClient:
     async def close(self) -> None:
         if self._session is not None and not self._session.closed:
             await self._session.close()
+
+    def cookie_snapshot(self, url: str = "") -> dict:
+        """
+        تشخيص: محتويات cookie_jar، وأي كوكيز ستُرسَل فعلياً لهذا الـ URL.
+        القيم مُخفاة (بادئة + طول) كي لا تُسرَّب أسرار في السجل.
+        """
+        def _mask(v: str) -> str:
+            v = str(v)
+            return f"{v[:6]}…(len={len(v)})" if v else "<فارغ>"
+
+        if self._session is None:
+            return {"jar": [], "would_send": {}, "note": "لا جلسة بعد"}
+        jar = self._session.cookie_jar
+        all_cookies = []
+        try:
+            for c in jar:
+                all_cookies.append({
+                    "name": c.key,
+                    "value": _mask(c.value),
+                    "domain": c.get("domain", ""),
+                    "path": c.get("path", ""),
+                })
+        except Exception:
+            pass
+        would = {}
+        if url:
+            try:
+                from yarl import URL as _URL
+
+                filtered = jar.filter_cookies(_URL(url))
+                would = {k: _mask(m.value) for k, m in filtered.items()}
+            except Exception:
+                would = {}
+        return {"jar": all_cookies, "would_send": would}

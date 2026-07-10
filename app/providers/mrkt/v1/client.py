@@ -95,10 +95,28 @@ class MrktClient:
         from app.providers.mrkt.v1.token_manager import mask_secret
 
         scheme = "Bearer" if token.lower().startswith("bearer ") else "<خام بلا بادئة>"
+        headers = self._headers(token)
         _log.info(
             "REQUEST %s | Authorization: %s | الصيغة=%s | ترويسات مرسلة=%s",
-            path, mask_secret(token), scheme, sorted(self._headers(token).keys()),
+            path, mask_secret(token), scheme, sorted(headers.keys()),
         )
+        # تشخيص الكوكيز: لا نبني ترويسة Cookie يدوياً (كالمرجع) — نُظهر ما ستفعله الجلسة
+        _log.info(
+            "COOKIE HEADER المُرسَلة يدوياً: %s",
+            headers.get("Cookie", "<لا شيء — لا نبنيها يدوياً، مطابق للمرجع>"),
+        )
+        snap = None
+        if hasattr(self._http, "cookie_snapshot"):
+            try:
+                snap = self._http.cookie_snapshot(f"{self._base}{path}")
+            except Exception:
+                snap = None
+        if snap is not None:
+            _log.info(
+                "COOKIE JAR: محتويات=%s | ستُرسَل تلقائياً لهذا الطلب=%s",
+                snap.get("jar") or "<فارغ>",
+                snap.get("would_send") or "<لا شيء>",
+            )
 
     @staticmethod
     def _parse_retry_after(resp: HttpResponse) -> Optional[float]:

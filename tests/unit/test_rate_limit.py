@@ -207,3 +207,35 @@ class TestReferenceParity(unittest.IsolatedAsyncioTestCase):
                        saling_count=50, limiter=AsyncRateLimiter(rate=1000, burst=100))
         await c.fetch_listings("")
         self.assertEqual(captured["body"]["count"], 20)   # الحدّ الأقصى لدى MRKT
+
+
+class TestEnvSanitization(unittest.TestCase):
+    """systemd EnvironmentFile لا يزيل التعليقات اللاحقة — يجب أن ننظّفها نحن."""
+
+    def test_trailing_comment_stripped(self):
+        import os
+        from app.config import _get
+        os.environ["_T1"] = "         # فارغ = null كما في العقد"
+        self.assertEqual(_get("_T1", "DEFAULT"), "DEFAULT")   # يصبح فارغاً → الافتراضي
+        os.environ["_T2"] = "20      # الحدّ الأقصى"
+        self.assertEqual(_get("_T2", "0"), "20")
+        os.environ["_T3"] = "app   # اسم التطبيق"
+        self.assertEqual(_get("_T3", "x"), "app")
+
+    def test_quoted_value_preserved(self):
+        import os
+        from app.config import _get
+        os.environ["_T4"] = '"Mozilla/5.0 (X) # not-a-comment"'
+        self.assertEqual(_get("_T4", ""), "Mozilla/5.0 (X) # not-a-comment")
+
+    def test_hash_without_leading_space_kept(self):
+        import os
+        from app.config import _get
+        os.environ["_T5"] = "secret#123"      # # ليس تعليقاً (لا مسافة قبله)
+        self.assertEqual(_get("_T5", ""), "secret#123")
+
+    def test_app_id_none_when_commented(self):
+        import os
+        os.environ["MRKT_AUTH_APP_ID"] = "   # فارغ"
+        from app.config import load_settings
+        self.assertIsNone(load_settings().mrkt_auth_app_id)

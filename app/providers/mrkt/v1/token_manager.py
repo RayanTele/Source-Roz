@@ -152,6 +152,23 @@ class TokenManager:
             self._base, self._auth_path, sorted(payload.keys()),
             len(init_data), sorted(self._auth_headers.keys()),
         )
+        if "appId" in payload:
+            _log.warning(
+                "تنبيه: يُرسَل appId=%r — المرجع الرسمي لا يرسله إطلاقاً. "
+                "إن لم تقصد ذلك، أزِل MRKT_AUTH_APP_ID من .env (وتأكّد ألا تعليق لاحق على السطر).",
+                payload["appId"],
+            )
+        # تشخيص بنية initData (المفاتيح فقط — لا قيم)
+        try:
+            import urllib.parse as _up
+
+            keys = sorted(k for k, _ in _up.parse_qsl(init_data, keep_blank_values=True))
+        except Exception:
+            keys = []
+        _log.info("INITDATA: المفاتيح=%s | الطول=%s", keys or "<تعذّر التحليل>", len(init_data))
+        for required in ("user", "hash", "auth_date"):
+            if required not in keys:
+                _log.warning("تنبيه: initData ينقصه المفتاح %r — قد يكون مقتطعاً/غير صالح", required)
         if self._limiter is not None:
             await self._limiter.acquire()
         resp = await self._http.request(
