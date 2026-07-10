@@ -6,6 +6,8 @@
 aiohttp==3.9.1
 Pillow==10.2.0   # اختياري: تصغير الصور (thumbnail/medium)؛ بدونه تُخدَم الأصلية
 telethon==1.36.0
+# اختياري: ناقل يطابق المرجع (بصمة TLS متصفح) — فعّله بـ HTTP_CLIENT=curl_cffi
+# curl_cffi==0.7.1
 #
 # تُضاف لاحقاً عند بلوغ مراحلها:
 #   Phase F (REST API): fastapi ; uvicorn ; pydantic

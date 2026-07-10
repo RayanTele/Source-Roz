@@ -21,7 +21,7 @@ from app.core.sync_engine import SyncEngine
 from app.infra.bot_client import BotCurrencyProvider
 from app.infra.cache_sqlite import SQLiteCacheRepository
 from app.infra.gram_price import GramPrice
-from app.infra.http_client import AiohttpClient
+from app.infra.http_client import AiohttpClient, build_http_client
 from app.infra.media_fs import FilesystemMediaStore
 from app.infra.public_api import PublicApi
 from app.providers.mrkt import build_mrkt_provider
@@ -31,7 +31,7 @@ from app.providers.mrkt import build_mrkt_provider
 class ServiceContext:
     settings: Settings
     metrics: Metrics
-    http: AiohttpClient
+    http: Any
     provider: Any
     gram: GramPrice
     media: MediaService
@@ -53,7 +53,7 @@ def build_service(settings: Settings = None) -> ServiceContext:
     """يبني سياق الخدمة الكامل (بلا تشغيل شبكي — الإقلاع فقط)."""
     s = settings or load_settings()
     metrics = Metrics()
-    http = AiohttpClient(timeout=s.mrkt_timeout)
+    http = build_http_client(s.http_client, timeout=s.mrkt_timeout, impersonate=s.curl_impersonate)
 
     provider = build_mrkt_provider(s, metrics, http)
     gram = GramPrice(

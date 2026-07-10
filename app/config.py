@@ -74,6 +74,8 @@ class Settings:
     mrkt_referer: str
     mrkt_origin: str
     mrkt_user_agent: str
+    http_client: str
+    curl_impersonate: str
     mrkt_webview_url: str
 
     # ── الصمود (Phase C) ──
@@ -124,6 +126,8 @@ def load_settings() -> Settings:
         mrkt_referer=_get("MRKT_REFERER", "https://cdn.tgmrkt.io/"),
         mrkt_origin=_get("MRKT_ORIGIN", ""),          # المرجع لا يرسلها
         mrkt_user_agent=_get("MRKT_USER_AGENT", ""),  # المرجع لا يرسلها
+        http_client=_get("HTTP_CLIENT", "aiohttp"),
+        curl_impersonate=_get("CURL_IMPERSONATE", "chrome"),
         mrkt_webview_url=_get("MRKT_WEBVIEW_URL", ""),
         # الصمود
         retry_max=int(_get("RETRY_MAX", "3")),

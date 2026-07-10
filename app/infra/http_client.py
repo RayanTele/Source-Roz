@@ -121,3 +121,17 @@ class AiohttpClient:
             except Exception:
                 would = {}
         return {"jar": all_cookies, "would_send": would}
+
+
+def build_http_client(kind: str = "aiohttp", timeout: float = 30.0, impersonate: str = "chrome"):
+    """
+    يبني عميل HTTP حسب الإعداد HTTP_CLIENT:
+      - "aiohttp"   (افتراضي)
+      - "curl_cffi" (يطابق المرجع الرسمي: بصمة TLS لمتصفح حقيقي)
+    كلاهما ينفّذ نفس عقد AsyncHttpClient — لا تغيير في أي واجهة.
+    """
+    if str(kind).lower() in ("curl_cffi", "curl", "cffi"):
+        from app.infra.http_client_curl import CurlCffiClient
+
+        return CurlCffiClient(timeout=timeout, impersonate=impersonate)
+    return AiohttpClient(timeout=timeout)

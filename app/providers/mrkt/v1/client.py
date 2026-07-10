@@ -90,6 +90,40 @@ class MrktClient:
             h["User-Agent"] = self._user_agent
         return h
 
+    def _log_outgoing(self, method: str, path: str, body: Optional[Any], token: str) -> None:
+        """
+        يسجّل الطلب الصادر **حرفياً** كما سيُرسَل: URL، الطريقة، بايتات JSON
+        المسلسلة، وكل الترويسات (مع إخفاء التوكن) — للمقارنة بالمرجع.
+        """
+        import hashlib
+        import json as _json
+
+        from app.providers.mrkt.v1.token_manager import mask_secret
+
+        headers = self._headers(token)
+        safe_headers = {
+            k: (mask_secret(v) if k.lower() == "authorization" else v)
+            for k, v in headers.items()
+        }
+        if body is None:
+            raw = b""
+        else:
+            raw = _json.dumps(body).encode("utf-8")
+        _log.info(
+            "OUTGOING >>> %s %s%s\n"
+            "  headers = %s\n"
+            "  body_bytes(len=%s, sha256=%s) = %s",
+            method, self._base, path,
+            safe_headers,
+            len(raw), hashlib.sha256(raw).hexdigest()[:16],
+            raw.decode("utf-8") if raw else "<لا جسم>",
+        )
+        _log.info(
+            "  transport = %s | Authorization scheme = %s",
+            type(self._http).__name__,
+            "Bearer" if token.lower().startswith("bearer ") else "raw (بلا بادئة)",
+        )
+
     def _log_auth_header(self, token: str, path: str) -> None:
         """يسجّل قيمة Authorization المُرسَلة فعلياً (مع إخفاء معظم التوكن)."""
         from app.providers.mrkt.v1.token_manager import mask_secret
@@ -137,6 +171,7 @@ class MrktClient:
         with request_context(provider="mrkt") as ctx:
             async def _do() -> HttpResponse:
                 token = await self._tokens.get_token()
+                self._log_outgoing(method, path, json, token)
                 self._log_auth_header(token, path)
                 await self._limiter.acquire()          # لا نتجاوز الحدّ المسموح
                 self._m.inc("api_requests")
