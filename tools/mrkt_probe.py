@@ -28,10 +28,43 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-BASE = os.getenv("MRKT_API_URL", "https://api.tgmrkt.io")
-SALING = f"{BASE}/api/v1/gifts/saling"
 
-# جسم الطلب مطابق حرفياً للمرجع
+def _load_env_file(path: str = None) -> tuple:
+    """
+    يحمّل ملف .env إلى os.environ **تماماً كما يفعل systemd EnvironmentFile** للخدمة.
+
+    الخدمة لا تقرأ .env بنفسها؛ الوحدة تحوي:
+        WorkingDirectory=/root/collectibles-service
+        EnvironmentFile=/root/collectibles-service/.env
+    فتُملأ البيئة قبل تشغيل app.main. عند تشغيل المِسبار يدوياً لا يوجد systemd،
+    لذا نحمّل نفس الملف بنفس الطريقة قبل استدعاء load_settings().
+
+    القيم تُمرَّر **خاماً** (بما فيها أي تعليق لاحق) لأن config._get هو من ينظّفها —
+    نفس المسار الإنتاجي بالضبط، فلا نقرأ الإعداد بطريقة مختلفة عن الخدمة.
+    لا نكسر متغيّراً مُصدَّراً مسبقاً في البيئة (مثل MRKT_TOKEN).
+    """
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    path = path or os.getenv("ENV_FILE") or os.path.join(root, ".env")
+    if not os.path.isfile(path):
+        return path, False
+    loaded = 0
+    with open(path, encoding="utf-8") as fh:
+        for line in fh:
+            s = line.strip()
+            if not s or s.startswith("#"):
+                continue
+            if s.startswith("export "):
+                s = s[len("export "):]
+            if "=" not in s:
+                continue
+            key, _, val = s.partition("=")
+            key = key.strip()
+            if key and key not in os.environ:
+                os.environ[key] = val  # خام — config._get سيتولّى التنظيف
+                loaded += 1
+    return path, loaded
+
+# جسم الطلب مطابق حرفياً للمرجع (الـ URL يُشتق داخل main من load_settings)
 REF_BODY = {
     "collectionNames": [],
     "modelNames": [],
@@ -79,42 +112,54 @@ async def get_token_via_telethon() -> str:
         await http.close()
 
 
-async def try_aiohttp(token: str):
+async def try_aiohttp(token: str, saling: str):
     try:
         import aiohttp
     except ImportError:
         return ("aiohttp", "غير مثبّت", "")
     async with aiohttp.ClientSession() as s:
-        async with s.post(SALING, json=REF_BODY, headers=ref_headers(token)) as r:
+        async with s.post(saling, json=REF_BODY, headers=ref_headers(token)) as r:
             body = (await r.read())[:300].decode("utf-8", "replace")
             return ("aiohttp", r.status, body)
 
 
-async def try_curl_cffi(token: str, impersonate: str = "chrome"):
+async def try_curl_cffi(token: str, saling: str, impersonate: str = "chrome"):
     try:
         from curl_cffi.requests import AsyncSession
     except ImportError:
         return (f"curl_cffi({impersonate})", "غير مثبّت — pip install curl_cffi", "")
     async with AsyncSession(impersonate=impersonate) as s:
-        r = await s.post(SALING, json=REF_BODY, headers=ref_headers(token))
+        r = await s.post(saling, json=REF_BODY, headers=ref_headers(token))
         body = (r.content or b"")[:300].decode("utf-8", "replace")
         return (f"curl_cffi({impersonate})", r.status_code, body)
 
 
 async def main() -> int:
+    # حمّل .env تماماً كـ systemd، ثم اقرأ الإعداد بنفس محمّل الخدمة
+    env_path, n = _load_env_file()
+    if n is False:
+        print(f"⚠️  لم يُعثر على .env في {env_path} — مرّر ENV_FILE=/path/.env إن لزم")
+    else:
+        print(f"… حُمّل .env من {env_path} ({n} متغيّراً) — نفس ملف EnvironmentFile للخدمة")
+
+    from app.config import load_settings
+    settings = load_settings()
+    base = settings.mrkt_base_url.rstrip("/")
+    saling = f"{base}/api/v1/gifts/saling"
+
     token = os.getenv("MRKT_TOKEN", "")
     if "--auth" in sys.argv or not token:
-        print("… توليد التوكن عبر Telethon من .env")
+        print("… توليد التوكن عبر Telethon من .env (نفس مسار الخدمة)")
         token = await get_token_via_telethon()
     print(f"التوكن: {mask(token)}")
-    print(f"الهدف : POST {SALING}")
+    print(f"الهدف : POST {saling}")
     print(f"الجسم : {json.dumps(REF_BODY, ensure_ascii=False)}")
-    print(f"الترويسات: Authorization=<masked>, Referer=https://cdn.tgmrkt.io/")
+    print("الترويسات: Authorization=<masked>, Referer=https://cdn.tgmrkt.io/")
     print("=" * 68)
 
     results = []
-    for coro in (try_aiohttp(token), try_curl_cffi(token, "chrome"),
-                 try_curl_cffi(token, "safari")):
+    for coro in (try_aiohttp(token, saling), try_curl_cffi(token, saling, "chrome"),
+                 try_curl_cffi(token, saling, "safari")):
         try:
             results.append(await coro)
         except Exception as exc:
